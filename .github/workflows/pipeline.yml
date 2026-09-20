@@ -1,0 +1,84 @@
+name: pipeline
+
+"on":
+  push:
+  workflow_dispatch: {}
+  schedule:
+    # Daily. GitHub schedules on the default branch only.
+    - cron: "0 6 * * *"
+
+jobs:
+  test:
+    # Runs on every push. No trained models needed: every test in tests/
+    # exercises pure functions with in-memory fixtures (fake/toy models,
+    # not the real trained artifacts), so this job needs no data download
+    # and no model download at all.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements.txt
+      - run: pytest
+
+  pipeline:
+    # Scheduled daily run of the actual pipeline stages, in order.
+    #
+    # Real, documented limitation: trained model artifacts (models/*.joblib,
+    # models/*.pkl, the ~56MB BERTopic pickle) and the HF model cache are
+    # gitignored on purpose - a fresh checkout has none of them. This job
+    # restores them from actions/cache instead of retraining, because
+    # retraining automatically here would silently reintroduce exactly what
+    # Stages 2/5 exist to prevent: a model or topic-id set changing without
+    # a deliberate, reviewed decision (see docs/decisions.md).
+    #
+    # Consequence: on a cold cache (first run, or GitHub evicts it - caches
+    # expire after ~7 days unused, or under repo-wide size pressure), the
+    # `score`/`topics` steps below fail LOUDLY with the existing, clear
+    # ValueError from pipeline/score.py / pipeline/topics.py ("No registry
+    # entry with sha256=...") rather than falling back to silently
+    # retraining. There is no fully automated fix for a cold cache within
+    # a no-paid-services setup - it needs a human to retrain locally and
+    # let the next run reseed the cache. This is a known, accepted gap, not
+    # an oversight.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements.txt
+
+      # Keyed on config/pipeline.yaml since that's where every pin (dataset
+      # category, active_model_sha, distilbert/embedding revisions) lives -
+      # a deliberate pin change is exactly what should bust this cache.
+      # Trade-off: an unrelated config edit (e.g. window.lookback_days)
+      # busts it too; accepted for simplicity in a portfolio-scale project.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            data/raw
+            models/hf_cache
+            models/*.joblib
+            models/*.pkl
+          key: pipeline-artifacts-${{ hashFiles('config/pipeline.yaml') }}
+
+      - name: Download raw data and pretrained models (idempotent, cache-aware)
+        run: |
+          python scripts/download_data.py
+          python scripts/download_model.py
+
+      - run: make ingest
+      - run: make validate
+      - run: make score
+      - run: make embed
+      - run: make topics
+      - run: make aggregate
+
+      - name: detect
+        # Expected to fail until pipeline/detect.py's bodies are implemented
+        # (Stage 6 - the author's own work, intentionally left as
+        # NotImplementedError stubs). Doesn't fail the job while that's true.
+        run: make detect
+        continue-on-error: true

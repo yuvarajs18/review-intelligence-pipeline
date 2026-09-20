@@ -1,0 +1,36 @@
+[
+  {
+    "name": "tfidf_logreg_baseline",
+    "sha256": "8441348d5a094a8159ad1d5f89eb38ff54c38e35ef976a906d4e4bb55e750ae4",
+    "artifact_path": "models/tfidf_logreg_baseline-8441348d5a09.joblib",
+    "trained_at": "2026-09-20T18:35:20.329884+00:00",
+    "training_rows": 99160,
+    "test_rows": 24791,
+    "class_balance": {
+      "positive": 114662,
+      "negative": 9289
+    },
+    "metrics": {
+      "accuracy": 0.9524827558388125,
+      "precision": 0.9923505182637035,
+      "recall": 0.956002267474818,
+      "f1": 0.9738373384266868
+    },
+    "vectorizer_config": {
+      "ngram_range": [
+        1,
+        2
+      ],
+      "min_df": 5,
+      "max_df": 0.9,
+      "max_features": 20000,
+      "sublinear_tf": true,
+      "stop_words": null
+    },
+    "classifier_config": {
+      "class_weight": "balanced",
+      "max_iter": 1000,
+      "random_state": 42
+    }
+  }
+]

@@ -1,0 +1,22 @@
+[
+  {
+    "sha256": "bfc6595a428a55f8f8e686efc150018afd3cc80a5bb53a33a0d0b0ac65c5d71a",
+    "artifact_path": "models/bertopic-bfc6595a428a.pkl",
+    "trained_at": "2026-09-20T19:18:05.442743+00:00",
+    "training_rows": 9289,
+    "n_topics": 50,
+    "n_outliers": 3645,
+    "umap_config": {
+      "n_neighbors": 15,
+      "n_components": 5,
+      "min_dist": 0.0,
+      "random_state": 42
+    },
+    "hdbscan_config": {
+      "min_cluster_size": 30,
+      "min_samples": 10
+    },
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "embedding_model_revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+  }
+]

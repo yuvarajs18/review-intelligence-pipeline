@@ -1,0 +1,89 @@
+paths:
+  raw_local: data/raw          # local HF download (scripts/download_data.py), gitignored
+  ingested: data/ingested       # partitioned Parquet written by pipeline/ingest.py
+  validated: data/validated     # partitioned Parquet written by pipeline/validate.py
+  scored: data/scored           # partitioned Parquet written by pipeline/score.py
+  embedded: data/embedded       # partitioned Parquet written by pipeline/embed.py
+  topics: data/topics           # partitioned Parquet written by pipeline/topics.py
+  warehouse: data/warehouse.db  # SQLite, written by pipeline/aggregate.py
+
+dataset:
+  hf_repo: McAuley-Lab/Amazon-Reviews-2023
+  category: Digital_Music       # see docs/decisions.md for why
+  hf_path: raw/review_categories/Digital_Music.jsonl
+
+window:
+  lookback_days: 30  # rolling window: [reference_date - lookback_days, reference_date)
+  # Amazon Reviews 2023 is a static historical dump (max timestamp 2023-09-06).
+  # Pinned here so the rolling window has data to find; drop this key in a
+  # real deployment to fall back to wall-clock now(). See docs/decisions.md.
+  reference_date: "2023-09-06"
+
+validation:
+  # Lower bound on a "plausible" review timestamp - before Amazon reviews
+  # existed. The upper bound is real wall-clock now(), not reference_date:
+  # reference_date is a windowing concept, not a truth bound on what
+  # timestamp is physically possible. See docs/decisions.md.
+  timestamp_min: "1995-01-01"
+  # Below this word count, language detection is unreliable (checked: 16%
+  # of this category's reviews are under 5 words) - these rows skip the
+  # language check and pass by default rather than risk misclassification.
+  language_check_min_words: 5
+
+model:
+  baseline:
+    name: tfidf_logreg_baseline
+    registry_path: models/registry.json
+    test_size: 0.2   # held-out slice of the pre-window training population, for metrics only
+    vectorizer:
+      ngram_range: [1, 2]   # unigrams alone miss negation ("not good"); see docs/decisions.md
+      min_df: 5
+      max_df: 0.9
+      max_features: 20000
+      sublinear_tf: true
+      stop_words: null       # sklearn's built-in list strips negators ("not", "no") - see docs/decisions.md
+    classifier:
+      class_weight: balanced  # ~12:1 positive:negative imbalance in this category
+      max_iter: 1000
+      random_state: 42
+    # Set manually after training (see scripts/train_baseline.py output and
+    # models/registry.json) — never auto-updated by the training script, so a
+    # scoring run only ever changes model when you deliberately bump this.
+    active_model_sha: 8441348d5a094a8159ad1d5f89eb38ff54c38e35ef976a906d4e4bb55e750ae4
+
+  distilbert:
+    name: distilbert-base-uncased-finetuned-sst-2-english
+    # Pinned to the model's current HF revision so it can't silently drift
+    # under us; re-pin deliberately if the upstream model is ever updated.
+    revision: 714eb0fa89d2f80546fda750413ed43d93601a13
+    cache_dir: models/hf_cache   # warmed by scripts/download_model.py, gitignored
+    batch_size: 16   # HF docs advise against batching on CPU - kept configurable so
+                      # the per-run throughput logging can show whether it helps here
+    max_length: 512  # truncation="only_first": see docs/decisions.md for why
+
+  embedding:
+    name: sentence-transformers/all-MiniLM-L6-v2
+    # Pinned for the same reason as distilbert.revision - see docs/decisions.md.
+    revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+    cache_dir: models/hf_cache
+
+topics:
+  registry_path: models/topics_registry.json
+  # Fit once, deliberately, never automatically - see docs/decisions.md for
+  # what breaks if this were refit daily. Set manually after
+  # scripts/fit_topics.py, same "pin it, bump it on purpose" pattern as
+  # model.baseline.active_model_sha.
+  active_model_sha: bfc6595a428a55f8f8e686efc150018afd3cc80a5bb53a33a0d0b0ac65c5d71a
+  # BERTopic fits UMAP then HDBSCAN; both take explicit params here instead
+  # of library defaults, and UMAP gets a fixed random_state so a refit is at
+  # least reproducible even though its output isn't meant to be "stable"
+  # across refits (only .transform() output is stable - see the refit
+  # explanation in docs/decisions.md).
+  umap:
+    n_neighbors: 15
+    n_components: 5
+    min_dist: 0.0
+    random_state: 42
+  hdbscan:
+    min_cluster_size: 30
+    min_samples: 10
