@@ -123,15 +123,24 @@ TKTK: what those 198 disagreements actually look like (sarcasm, mixed
 reviews, truncation effects) - not inspected yet.
 
 **Topic model**: 50 topics found; 3,645 of 9,289 training reviews (39.2%)
-landed in the outlier bucket (topic `-1`) rather than any cluster. Example
-auto-generated labels - **not yet hand-edited** into readable business
-language (see `config/topic_names.yaml`):
-- `9_skips_skipped_skip_cd` - looks like playback/skipping defects
-- `4_poster_photocard_photo_card` - looks like missing promotional merch
-- `13_case_broken_cracked_cd` - looks like damaged packaging
+landed in the outlier bucket (topic `-1`) rather than any cluster. Labels
+are hand-edited (see `config/topic_names.yaml`), grounded in each topic's
+actual representative documents, not guessed from keyword stems alone -
+e.g. `9` -> `cd_skips_during_playback`, `4` -> `missing_promotional_merch_poster_photocard`,
+`13` -> `cracked_or_broken_cd_case`.
 
-TKTK: the hand-edited label set, and whether 39.2% outliers is acceptable
-or means `hdbscan.min_cluster_size`/`min_samples` need retuning.
+Labeling surfaced a real fragmentation issue: topics `23`, `32`, and `41`
+are all "poor sound/recording quality," split into three separate clusters
+instead of one, and `35`/`43` are near-duplicate "Beatles bootleg" warnings
+- documented in the label file's header rather than silently merged, since
+fixing it means retuning `hdbscan.min_cluster_size`/`min_samples` and
+deliberately refitting, not editing labels. Also surfaced: topics `8`, `37`,
+and `44` turn out to be a book, a food item, and a garden hose/instrument
+part - miscategorized into Digital_Music in the source dataset.
+
+TKTK: whether 39.2% outliers is acceptable or needs retuning, and whether
+the fragmented "sound quality" topics are worth merging on the next
+deliberate refit.
 
 **Drift experiment** (`evaluation/drift_experiment.py`, 60 simulated days,
 Gift_Cards injected from day 30 onward), PSI against a fixed pre-injection
