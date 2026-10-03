@@ -20,7 +20,10 @@ jobs:
         with:
           python-version: "3.14"
       - run: pip install -r requirements.txt
-      - run: pytest
+      # python -m pytest, not bare `pytest`: without -m, the current
+      # directory isn't put on sys.path the same way, so `pipeline` isn't
+      # importable as a package (this bit us - see docs/decisions.md).
+      - run: python -m pytest
 
   pipeline:
     # Scheduled daily run of the actual pipeline stages, in order.
@@ -43,6 +46,13 @@ jobs:
     # let the next run reseed the cache. This is a known, accepted gap, not
     # an oversight.
     runs-on: ubuntu-latest
+    env:
+      # The Makefile's targets call $(PYTHON), defaulting to .venv/bin/python
+      # for local runs - there's no .venv/ on this runner (setup-python
+      # installs directly), so override it to plain `python` (this bit us -
+      # every make step failed with ".venv/bin/python: No such file or
+      # directory" until this was added; see docs/decisions.md).
+      PYTHON: python
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,9 +86,4 @@ jobs:
       - run: make topics
       - run: make aggregate
 
-      - name: detect
-        # Expected to fail until pipeline/detect.py's bodies are implemented
-        # (Stage 6 - the author's own work, intentionally left as
-        # NotImplementedError stubs). Doesn't fail the job while that's true.
-        run: make detect
-        continue-on-error: true
+      - run: make detect

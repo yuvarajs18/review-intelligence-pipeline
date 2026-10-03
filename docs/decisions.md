@@ -402,3 +402,41 @@ inspect and reason about himself, not a statistically rigorous estimator.
 unfinished) - confirms the harness's own mechanics (replay, injection,
 distribution stats, CSV writing) work correctly independent of that
 dependency, exactly as designed.
+
+## 2026-10-03 — Two CI bugs: neither job had ever actually run successfully
+
+**Context:** checked `gh run list` while reviewing project state and found
+every CI run since the first push had failed - not from the documented
+cold-cache limitation (see the CI workflow's own comments), but from two
+more basic bugs upstream of it that meant the designed cache/model-pinning
+logic had never actually been exercised.
+
+**Bug 1 - `test` job ran bare `pytest`:** without `-m`, the current
+directory isn't put on `sys.path` the same way `python -m pytest` does, so
+`from pipeline.X import Y` failed with `ModuleNotFoundError: No module
+named 'pipeline'` in every test file. This never surfaced locally because
+the Makefile's `test` target always runs `$(PYTHON) -m pytest`, but the
+workflow's `test` job called `pytest` directly, bypassing the Makefile
+entirely.
+
+**Bug 2 - `pipeline` job's `make` targets hardcoded `.venv/bin/python`:**
+every `make ingest`/`score`/etc. step failed immediately with
+`.venv/bin/python: No such file or directory`, before reaching the
+cache-restore or model-loading logic at all. `actions/setup-python`
+installs Python directly onto the runner's PATH; it doesn't create a
+project-local `.venv/` the way a local dev setup does.
+
+**Fix:** `Makefile`'s `PYTHON = .venv/bin/python` became `PYTHON ?=
+.venv/bin/python` (GNU Make's conditional assignment - verified locally
+that an environment variable correctly overrides a `?=` default before
+relying on it), and the `pipeline` job in the workflow sets `env: {PYTHON:
+python}` at the job level. The `test` job's `run: pytest` became `run:
+python -m pytest`. Also removed the `detect` step's `continue-on-error`
+and its "expected to fail" comment, since `pipeline/detect.py` is now
+fully implemented and a real failure there should fail the job, not be
+silently swallowed.
+
+**Consequence:** this is a reminder that an untested CI workflow file is
+just a YAML file with good intentions - it needed to actually run (and be
+checked with `gh run list`, not just read) before its designed failure
+mode could be trusted as the real failure mode.
