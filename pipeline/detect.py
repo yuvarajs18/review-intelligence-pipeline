@@ -21,6 +21,16 @@ main() is left to wire these primitives to the warehouse (config.paths
 from collections.abc import Sequence
 
 import pandas as pd
+import numpy as np
+import argparse
+import sqlite3
+from pathlib import Path
+from datetime import datetime, timezone
+import duckdb
+from pipeline.runs import log_run
+from pipeline.runs import log_run
+
+import yaml
 
 
 def detect_spike(series: pd.Series, z_threshold: float = 3.0) -> pd.Series:
@@ -43,8 +53,13 @@ def detect_spike(series: pd.Series, z_threshold: float = 3.0) -> pd.Series:
     Returns a boolean pd.Series aligned with `series`'s index (same
     length, same index labels).
     """
-    raise NotImplementedError
+    std = series.std(ddof=0)
+    if std == 0:
+        return pd.Series(False, index=series.index)
 
+    mean = series.mean()
+    z_scores = (series - mean) / std
+    return abs(z_scores) >= z_threshold
 
 def compute_psi(
     reference: pd.Series,
@@ -87,7 +102,18 @@ def compute_psi(
     as "moderate", and > 0.25 as "significant" - deciding what threshold
     should actually raise an alert is a separate judgment call.
     """
-    raise NotImplementedError
+    ref_counts, edges = np.histogram(reference, bins)       # Step 1-2: get edges from reference
+    cur_counts, _ = np.histogram(current, bins=edges)             # Step 3: reuse `edges`, NOT `bins` again
+
+    reference_pct =  ref_counts/ref_counts.sum()     # Step 4: ref_counts turned into percentages (divide by the total)
+    current_pct =  cur_counts/cur_counts.sum()         # Step 4: same idea, for cur_counts
+
+    reference_pct_safe = reference_pct + 1e-8   # Step 5: add the small nudge number
+    current_pct_safe = current_pct + 1e-8      # Step 5: same, for current_pct
+
+    terms = (current_pct_safe - reference_pct_safe) * np.log(current_pct_safe / reference_pct_safe)     # Step 6: the formula, using the _safe versions
+    return terms.sum()          # Step 6: add all the terms together into one number
+    
 
 
 def main() -> None:
@@ -98,8 +124,96 @@ def main() -> None:
     `runs`, but the schema and the alerting rules themselves are a design
     decision to make deliberately, not to inherit from this stub).
     """
-    raise NotImplementedError
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", default="config/pipeline.yaml")
+    args = parser.parse_args()
+    config = yaml.safe_load(Path(args.config).read_text())
+
+    warehouse_path = Path(config["paths"]["warehouse"])
+    conn = sqlite3.connect(warehouse_path)
+    stats = pd.read_sql_query("select * from product_week_stats", conn)
+    conn.close()
+
+    weeks_per_product = stats.groupby("product_id")["week_start"].count()
+    eligible_products = weeks_per_product[weeks_per_product >= 3].index.tolist()
+    print(f"{len(eligible_products)} products have >= 3 weeks of history")
+
+    alerts = []
+    for product_id in eligible_products:
+        product_rows = stats[stats["product_id"] == product_id].sort_values("week_start").reset_index(drop=True)
+
+        count_flags = detect_spike(product_rows["review_count"], z_threshold=2.0)
+        count_bad = count_flags & (product_rows["review_count"] > product_rows["review_count"].mean())
+
+        rating_flags = detect_spike(product_rows["mean_rating"], z_threshold=2.0)
+        rating_bad = rating_flags & (product_rows["mean_rating"] < product_rows["mean_rating"].mean())
+
+        for i in range(len(product_rows)):
+            if count_bad[i]:
+                alerts.append({
+                    "product_id": product_id,
+                    "week_start": product_rows["week_start"][i],
+                    "alert_type": "complaint_volume_spike",
+                    "metric_value": product_rows["review_count"][i],
+                })
+            if rating_bad[i]:
+                alerts.append({
+                    "product_id": product_id,
+                    "week_start": product_rows["week_start"][i],
+                    "alert_type": "rating_drop",
+                    "metric_value": product_rows["mean_rating"][i],
+                })
+
+    print(f"{len(alerts)} alerts found")
+    conn = sqlite3.connect(warehouse_path)
+    conn.execute("""
+        create table if not exists alerts (
+            id integer primary key autoincrement,
+            detected_at text not null,
+            product_id text not null,
+            week_start text not null,
+            alert_type text not null,
+            metric_value real not null,
+            unique(product_id, week_start, alert_type)
+        )
+    """)
+    now = datetime.now(timezone.utc).isoformat()
+    for a in alerts:
+        conn.execute(
+            "insert or ignore into alerts (detected_at, product_id, week_start, alert_type, metric_value) values (?, ?, ?, ?, ?)",
+            (now, a["product_id"], a["week_start"], a["alert_type"], float(a["metric_value"])),
+        )
+    conn.commit()
+    conn.close()
+    print(f"{len(alerts)} alerts found and written to the alerts table")
+
+    scored_dir = Path(config["paths"]["scored"])
+    con = duckdb.connect()
+    scored = con.execute(f"select * from read_parquet('{scored_dir}/*/*.parquet')").fetchdf()
+    scored = scored.sort_values("timestamp").reset_index(drop=True)
+
+    midpoint = len(scored) // 2
+    reference = scored.iloc[:midpoint]
+    current = scored.iloc[midpoint:]
+
+    print(f"reference: {len(reference)} rows, {reference['timestamp'].min()} to {reference['timestamp'].max()}")
+    print(f"current:   {len(current)} rows, {current['timestamp'].min()} to {current['timestamp'].max()}")
+
+    baseline_psi = compute_psi(reference["baseline_sentiment_score"], current["baseline_sentiment_score"])
+    distilbert_psi = compute_psi(reference["distilbert_sentiment_score"], current["distilbert_sentiment_score"])
+
+    print(f"baseline PSI:   {baseline_psi}")
+    print(f"distilbert PSI: {distilbert_psi}")
+
+    log_run(
+        warehouse_path,
+        stage="detect",
+        rows_in=len(scored),
+        latency_seconds=0.0,
+        score_distribution={"baseline_psi": baseline_psi, "distilbert_psi": distilbert_psi},
+    )
 
 
 if __name__ == "__main__":
     main()
+

@@ -13,7 +13,7 @@ dataset:
   hf_path: raw/review_categories/Digital_Music.jsonl
 
 window:
-  lookback_days: 30  # rolling window: [reference_date - lookback_days, reference_date)
+  lookback_days: 200  # rolling window: [reference_date - lookback_days, reference_date)
   # Amazon Reviews 2023 is a static historical dump (max timestamp 2023-09-06).
   # Pinned here so the rolling window has data to find; drop this key in a
   # real deployment to fall back to wall-clock now(). See docs/decisions.md.
