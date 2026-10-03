@@ -440,3 +440,41 @@ silently swallowed.
 just a YAML file with good intentions - it needed to actually run (and be
 checked with `gh run list`, not just read) before its designed failure
 mode could be trusted as the real failure mode.
+
+## 2026-10-03 — Detection: z_threshold=2.0 for per-product spike detection
+
+**Context:** `pipeline/detect.py`'s `main()` calls `detect_spike` on each
+eligible product's weekly `review_count` and `mean_rating` series.
+`detect_spike`'s own signature defaults to `z_threshold=3.0`, but most
+products here only have 3-11 weeks of history (widened from a 30-day to a
+200-day ingest window specifically to get enough weekly history for this
+to be meaningful at all - see the lookback_days entry above).
+
+**Checked against a real case before deciding, not assumed:** product
+`B099BQHKYZ`'s 11-week rating series is `[2.0, 1.0, 5.0, 5.0, 3.0, 5.0,
+4.5, 3.0, 5.0, 5.0, 5.0]` (mean ≈ 3.95). At the default `z_threshold=3.0`,
+nothing in this series gets flagged at all - not even the genuinely bad
+`1.0` week - because with only 11 points, a single outlier inflates the
+very standard deviation it's being measured against (the same effect
+observed in `tests/test_detect.py`'s hand-computed spike fixture, here
+working against sensitivity instead of for it). At `z_threshold=1.5-2.0`,
+that `1.0` week correctly gets flagged while the milder `2.0`-rating week
+does not.
+
+**Choice:** `z_threshold=2.0` for both series in `main()` - more sensitive
+than the function's own default, deliberately, to compensate for how short
+these per-product histories are.
+
+**Verified against real alerts after the fact, not just the one test
+case:** of the 27 alerts produced, several corroborate each other rather
+than looking like noise - e.g. product `B084J7CCY4` fires both
+`complaint_volume_spike` and `rating_drop` on the *same* week
+(`2023-03-27`: review count jumped to 3 against a mean of 1.33, same
+week's mean rating dropped to 3.67 against a mean of 4.78) - one real
+event producing two consistent signals, not two unrelated coincidences.
+
+**Consequence:** this threshold is tuned for *short* per-product histories
+specifically. If the ingest window grows much larger (more weeks per
+product), 2.0 may turn out to be too sensitive and produce noisy alerts on
+a series that now has enough points for its std to be a stable estimate -
+worth revisiting then, not assumed to be correct forever.
