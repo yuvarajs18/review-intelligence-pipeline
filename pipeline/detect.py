@@ -1,10 +1,10 @@
 """Detect: product degradation and model/topic drift alerts.
 
-Signatures, docstrings and type hints only - every body raises
-NotImplementedError. This is the one stage the author (Yuvaraj) implements
-himself, per the working agreement: the detection logic is what he needs to
-be able to defend from first principles in an interview, not just from
-having it pass tests someone else wrote.
+Implemented by the author (Yuvaraj), not scaffolded by Claude Code, per the
+working agreement: the detection logic is what he needs to be able to
+defend from first principles in an interview, not just from having it pass
+tests someone else wrote. tests/test_detect.py was written first, against
+the contracts documented below, before any implementation existed.
 
 Two primitives:
 - detect_spike: per-series anomaly detection (e.g. a product's weekly
@@ -14,8 +14,11 @@ Two primitives:
   (e.g. sentiment scores from two different weeks) - the standard way to
   ask "has this distribution shifted enough to worry about drift?"
 
-main() is left to wire these primitives to the warehouse (config.paths
-.warehouse) and whatever alert output format is decided - also his call.
+main() wires both primitives to the warehouse (config.paths.warehouse):
+per-product degradation alerts (direction-aware, written idempotently to
+an `alerts` table) and model-drift detection (PSI between a chronological
+reference/current split of sentiment scores, logged to the `runs` table).
+See docs/decisions.md for the z_threshold=2.0 decision.
 """
 
 from collections.abc import Sequence
@@ -27,7 +30,6 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
 import duckdb
-from pipeline.runs import log_run
 from pipeline.runs import log_run
 
 import yaml
