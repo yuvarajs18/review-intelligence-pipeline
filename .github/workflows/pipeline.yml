@@ -38,10 +38,15 @@ jobs:
     #
     # Consequence: on a cold cache (first run, or GitHub evicts it - caches
     # expire after ~7 days unused, or under repo-wide size pressure), the
-    # `score`/`topics` steps below fail LOUDLY with the existing, clear
-    # ValueError from pipeline/score.py / pipeline/topics.py ("No registry
-    # entry with sha256=...") rather than falling back to silently
-    # retraining. There is no fully automated fix for a cold cache within
+    # `score`/`topics` steps below fail LOUDLY - verified for real via
+    # `gh run view`, not just assumed: the registry entry resolves fine
+    # (models/registry.json IS committed to git), but the .joblib/.pkl file
+    # it points to doesn't exist, raising FileNotFoundError from
+    # joblib.load/pickle.load. (pipeline/score.py's own ValueError only
+    # fires if the registry entry itself is missing or mismatched - a
+    # different, narrower case than a cold artifact cache.) Either way it
+    # fails loudly rather than falling back to silently retraining. There
+    # is no fully automated fix for a cold cache within
     # a no-paid-services setup - it needs a human to retrain locally and
     # let the next run reseed the cache. This is a known, accepted gap, not
     # an oversight.
