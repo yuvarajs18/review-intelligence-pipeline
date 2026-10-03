@@ -91,16 +91,76 @@ A few of the more interview-relevant ones - full reasoning for each is in
 
 ## Results
 
-TKTK - filled in from my own runs, not invented here.
+Raw numbers below are from real runs (`models/registry.json`,
+`models/topics_registry.json`, `data/warehouse.db`,
+`evaluation/drift_experiment_results.csv`) - interpretation and write-up are
+still TKTK, left for the author to do himself.
 
-- Baseline (TF-IDF + logistic regression) vs. DistilBERT: accuracy /
-  precision / recall / F1, and where they disagree: TKTK
-- Topic model: number of topics found, outlier rate, example themes with
-  their hand-edited labels: TKTK
-- Drift experiment (`evaluation/drift_experiment.py`): PSI trend across the
-  injection point, and what it does/doesn't show: TKTK
-- Detection (`pipeline/detect.py`): example alerts raised against real data,
-  and how the thresholds were chosen: TKTK
+**Baseline (TF-IDF + logistic regression)**, trained on 99,160 reviews,
+held out 24,791 for evaluation:
+
+| Metric | Value |
+|---|---|
+| Accuracy | 0.952 |
+| Precision | 0.992 |
+| Recall | 0.956 |
+| F1 | 0.974 |
+
+TKTK: these are high partly because of the ~12:1 class imbalance in this
+category (see decisions.md) - a per-class breakdown would be the more
+honest number to lead with in an interview.
+
+**Baseline vs. DistilBERT**, same 2,206-row scored window:
+
+| | Baseline | DistilBERT |
+|---|---|---|
+| Throughput | 35,805 rows/sec | 33.7 rows/sec |
+| Predicted positive | 1,854 | 1,796 |
+| Mean score | 0.802 | 0.815 |
+
+Label agreement: 91.0% (2,008/2,206); disagreement: 9.0% (198/2,206).
+TKTK: what those 198 disagreements actually look like (sarcasm, mixed
+reviews, truncation effects) - not inspected yet.
+
+**Topic model**: 50 topics found; 3,645 of 9,289 training reviews (39.2%)
+landed in the outlier bucket (topic `-1`) rather than any cluster. Example
+auto-generated labels - **not yet hand-edited** into readable business
+language (see `config/topic_names.yaml`):
+- `9_skips_skipped_skip_cd` - looks like playback/skipping defects
+- `4_poster_photocard_photo_card` - looks like missing promotional merch
+- `13_case_broken_cracked_cd` - looks like damaged packaging
+
+TKTK: the hand-edited label set, and whether 39.2% outliers is acceptable
+or means `hdbscan.min_cluster_size`/`min_samples` need retuning.
+
+**Drift experiment** (`evaluation/drift_experiment.py`, 60 simulated days,
+Gift_Cards injected from day 30 onward), PSI against a fixed pre-injection
+reference:
+
+| | Baseline PSI | DistilBERT PSI |
+|---|---|---|
+| Pre-injection (days 0-29) | 0.030 - 0.063 (mean 0.040) | 0.012 - 0.295 (mean 0.144) |
+| Post-injection (days 30-59) | 0.089 - 0.614 (mean 0.180) | 0.065 - 0.911 (mean 0.454) |
+| Day 29 -> day 30 | 0.042 -> 0.118 | 0.210 -> 0.551 |
+
+TKTK: what this does/doesn't show - e.g. whether DistilBERT's much larger
+pre-injection PSI range (up to 0.295 with *no* injection yet) means it's
+just a noisier signal on this data, or whether the fixed reference window
+was too small to give DistilBERT a stable baseline.
+
+**Detection** (`pipeline/detect.py`, run against a 200-day window, 102
+products with >= 3 weeks of history, `z_threshold=2.0`):
+- 27 alerts: 15 `rating_drop`, 12 `complaint_volume_spike`.
+- Model drift (PSI, chronological first-half/second-half split of all 2,206
+  scored reviews): baseline 0.028, DistilBERT 0.017 - both well under the
+  0.1 "no significant shift" rule of thumb, consistent with both halves
+  coming from the same stable historical category rather than a real shift.
+
+TKTK: whether `z_threshold=2.0` is the right sensitivity for production use
+(chosen after observing that the default `3.0` missed a real rating-drop
+week in testing - this decision doesn't have a `docs/decisions.md` entry
+yet and should get one, per this project's own convention), and 2-3 example
+alerts worth walking through in an interview.
 
 ## Limitations
 
@@ -108,7 +168,8 @@ TKTK - filled in from my own runs, not invented here.
   artifacts (not committed to git); a cache eviction fails the run loudly
   rather than silently retraining - a known gap in a no-paid-services setup,
   not an oversight (see `.github/workflows/pipeline.yml`).
-- BERTopic's outlier rate on this category's training population: TKTK.
+- BERTopic's outlier rate on this category's training population is 39.2%
+  (3,645/9,289) - whether that's acceptable or needs retuning is TKTK.
 - The language filter's short-text exemption threshold is a judgment call,
   not a tuned optimum - see decisions.md.
 
