@@ -164,16 +164,22 @@ training population *shrank* from the previous fit (9,289&rarr;7,874
 negative reviews) as a direct, expected consequence of widening the
 serving window - see decisions.md.
 
-**Known gap, stated plainly**: `config/topic_names.yaml` is currently the
-auto-generated keyword stems, not hand-edited - the previous hand-editing
-pass (documented in an earlier version of this README) was done against
-the *old* 50-topic fit, and a refit assigns entirely new topic IDs with
-different content, so those labels no longer apply to anything and were
-not carried forward. Re-labeling this 47-topic fit from its real
-representative documents is still TKTK.
+Labels in `config/topic_names.yaml` are hand-edited for this fit,
+grounded in each topic's real representative documents (the previous
+hand-editing pass, done against the old 50-topic fit, was discarded
+wholesale when the refit assigned entirely new topic IDs - exactly the
+"re-edit after every refit" consequence documented in the file's own
+header). Fragmentation persists after refitting, it just relocates: topics
+`0`/`2` are both terse one-star reviews, `23`/`24` are both "cracked case,"
+and `25`/`31`/`44` are now *three* near-duplicate Beatles-bootleg
+clusters (up from two in the previous fit). Also still present:
+miscategorized items from the source dataset (`4` a book, `37` a food
+item, `42` a garden hose).
 
-TKTK: whether 41.5% outliers is acceptable or needs retuning, and the
-hand-edited label set for this fit.
+TKTK: whether 41.5% outliers is acceptable or needs retuning, and whether
+the recurring fragmentation (not just this fit's specific topics, but the
+*pattern* of fragmentation surviving a refit) suggests `hdbscan`'s
+parameters need retuning rather than the training population.
 
 **Drift experiment** (`evaluation/drift_experiment.py`, 60 simulated days,
 Gift_Cards injected from day 30 onward), PSI against a fixed pre-injection
@@ -226,10 +232,10 @@ with hand-verified z-scores).
   (3,270/7,874) - whether that's acceptable or needs retuning is TKTK.
 - The language filter's short-text exemption threshold is a judgment call,
   not a tuned optimum - see decisions.md.
-- `config/topic_names.yaml` is currently un-edited keyword stems for the
-  current 47-topic fit - a refit resets this file, and re-labeling it from
-  real representative documents is a manual step that hasn't been redone
-  since the window was widened.
+- A refit always resets `config/topic_names.yaml` to raw keyword stems -
+  re-labeling it (done twice now, for the 50-topic and 47-topic fits) is a
+  manual step with no automation, and will need redoing again on the next
+  deliberate refit.
 
 ## How this was built
 
