@@ -32,5 +32,39 @@
       "max_iter": 1000,
       "random_state": 42
     }
+  },
+  {
+    "name": "tfidf_logreg_baseline",
+    "sha256": "f732ce395686efa2d9920d5686d0517ae86496d2cb59e6dc1142172153e7bfa6",
+    "artifact_path": "models/tfidf_logreg_baseline-f732ce395686.joblib",
+    "trained_at": "2026-10-06T12:28:13.836710+00:00",
+    "training_rows": 87403,
+    "test_rows": 21851,
+    "class_balance": {
+      "positive": 101380,
+      "negative": 7874
+    },
+    "metrics": {
+      "accuracy": 0.9507574024072125,
+      "precision": 0.9930156121610517,
+      "recall": 0.9536397711580193,
+      "f1": 0.9729294555700916
+    },
+    "vectorizer_config": {
+      "ngram_range": [
+        1,
+        2
+      ],
+      "min_df": 5,
+      "max_df": 0.9,
+      "max_features": 20000,
+      "sublinear_tf": true,
+      "stop_words": null
+    },
+    "classifier_config": {
+      "class_weight": "balanced",
+      "max_iter": 1000,
+      "random_state": 42
+    }
   }
 ]

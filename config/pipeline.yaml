@@ -13,7 +13,7 @@ dataset:
   hf_path: raw/review_categories/Digital_Music.jsonl
 
 window:
-  lookback_days: 200  # rolling window: [reference_date - lookback_days, reference_date)
+  lookback_days: 730  # rolling window: [reference_date - lookback_days, reference_date)
   # Amazon Reviews 2023 is a static historical dump (max timestamp 2023-09-06).
   # Pinned here so the rolling window has data to find; drop this key in a
   # real deployment to fall back to wall-clock now(). See docs/decisions.md.
@@ -49,7 +49,7 @@ model:
     # Set manually after training (see scripts/train_baseline.py output and
     # models/registry.json) — never auto-updated by the training script, so a
     # scoring run only ever changes model when you deliberately bump this.
-    active_model_sha: 8441348d5a094a8159ad1d5f89eb38ff54c38e35ef976a906d4e4bb55e750ae4
+    active_model_sha: f732ce395686efa2d9920d5686d0517ae86496d2cb59e6dc1142172153e7bfa6
 
   distilbert:
     name: distilbert-base-uncased-finetuned-sst-2-english
@@ -73,7 +73,7 @@ topics:
   # what breaks if this were refit daily. Set manually after
   # scripts/fit_topics.py, same "pin it, bump it on purpose" pattern as
   # model.baseline.active_model_sha.
-  active_model_sha: bfc6595a428a55f8f8e686efc150018afd3cc80a5bb53a33a0d0b0ac65c5d71a
+  active_model_sha: d62f4dfa6044f80d0fac1de7402d95e5c2e841eb5ec1849aa203781433f28b98
   # BERTopic fits UMAP then HDBSCAN; both take explicit params here instead
   # of library defaults, and UMAP gets a fixed random_state so a refit is at
   # least reproducible even though its output isn't meant to be "stable"

@@ -18,5 +18,25 @@
     },
     "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
     "embedding_model_revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+  },
+  {
+    "sha256": "d62f4dfa6044f80d0fac1de7402d95e5c2e841eb5ec1849aa203781433f28b98",
+    "artifact_path": "models/bertopic-d62f4dfa6044.pkl",
+    "trained_at": "2026-10-06T12:29:33.371327+00:00",
+    "training_rows": 7874,
+    "n_topics": 47,
+    "n_outliers": 3270,
+    "umap_config": {
+      "n_neighbors": 15,
+      "n_components": 5,
+      "min_dist": 0.0,
+      "random_state": 42
+    },
+    "hdbscan_config": {
+      "min_cluster_size": 30,
+      "min_samples": 10
+    },
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "embedding_model_revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
   }
 ]

@@ -3,18 +3,13 @@
 Reads only from data/warehouse.db (SQLite) and the pipeline's Parquet
 layers - never writes anything back, and never fabricates a number: every
 panel either shows real data or a clear "not available yet" message when
-the upstream stage that would produce it hasn't run (or, for the alerts
-panel, hasn't been implemented yet - that's pipeline/detect.py, the
-author's own unfinished work per the working agreement).
+the upstream stage that would produce it hasn't run.
 
-Panels:
-- Topic trends over time (data/topics/, labeled via config/topic_names.yaml)
-- Complaint themes by product (same data, grouped by product)
-- Flagged products (an `alerts` table - gracefully degrades if it doesn't
-  exist, since pipeline/detect.py's alerting logic isn't implemented yet)
-- Model comparison (models/registry.json + models/topics_registry.json -
-  the same metrics scripts/train_baseline.py and scripts/fit_topics.py
-  already produced, not a separately invented file)
+Layout: an at-a-glance summary strip up top (answers "what's here" with no
+clicking), then three tabs ordered by how actionable they are - Flagged
+Products first (the headline output), Topics second (trend + full product
+breakdown in one place, no per-product dropdown required), Models last
+(registries, least urgent for a quick look).
 """
 
 import json
@@ -77,13 +72,48 @@ def load_registry(path: str) -> list:
 st.title("Review Intelligence Pipeline")
 st.caption("Read-only view over data/warehouse.db and the pipeline's Parquet layers.")
 
-tab_topics, tab_products, tab_alerts, tab_models = st.tabs(
-    ["Topic trends", "Complaint themes by product", "Flagged products", "Model comparison"]
+# --- At a glance: answers "what's here" before any tab is clicked ---
+alerts_df = load_sqlite_table("alerts")
+topics_df = load_topics_data()
+baseline_entries = load_registry(str(BASELINE_REGISTRY_PATH))
+topics_entries = load_registry(str(TOPICS_REGISTRY_PATH))
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Flagged products", len(alerts_df) if not alerts_df.empty else 0)
+col2.metric("Topics found", topics_entries[-1]["n_topics"] if topics_entries else "-")
+col3.metric(
+    "Negative reviews analyzed",
+    f"{len(topics_df):,}" if not topics_df.empty else 0,
 )
+col4.metric(
+    "Active baseline F1",
+    f"{baseline_entries[-1]['metrics']['f1']:.3f}" if baseline_entries else "-",
+)
+st.divider()
+
+tab_alerts, tab_topics, tab_models = st.tabs(["Flagged Products", "Topics", "Models"])
+
+with tab_alerts:
+    st.subheader("Products flagged for degradation or drift")
+    if alerts_df.empty:
+        st.info(
+            "No `alerts` table found in data/warehouse.db yet - run `make detect` first."
+        )
+    else:
+        st.caption(
+            f"{len(alerts_df)} alerts: "
+            + ", ".join(
+                f"{count} {name}"
+                for name, count in alerts_df["alert_type"].value_counts().items()
+            )
+        )
+        display_df = alerts_df[["product_id", "week_start", "alert_type", "metric_value"]].sort_values(
+            "week_start", ascending=False
+        )
+        st.dataframe(display_df, hide_index=True, use_container_width=True)
 
 with tab_topics:
-    st.subheader("Negative-review topic volume over time")
-    topics_df = load_topics_data()
+    st.subheader("Negative-review topic trends")
     if topics_df.empty:
         st.info("No data in data/topics/ yet - run `make embed && make topics` first.")
     else:
@@ -104,13 +134,7 @@ with tab_topics:
             "distinct topics (including outliers, topic -1)."
         )
 
-with tab_products:
-    st.subheader("Top complaint themes per product")
-    topics_df = load_topics_data()
-    if topics_df.empty:
-        st.info("No data in data/topics/ yet - run `make embed && make topics` first.")
-    else:
-        topic_names = load_topic_names()
+        st.markdown("##### Top complaint theme per product")
         real_themes = topics_df[topics_df["topic_id"] != -1]  # -1 is BERTopic's outlier bucket, not a theme
         if real_themes.empty:
             st.info("Every negative review currently falls into the outlier bucket (topic -1) - no themes to show yet.")
@@ -121,33 +145,18 @@ with tab_products:
             product_topic_counts["topic_label"] = product_topic_counts["topic_id"].map(
                 lambda t: topic_names.get(t, f"topic_{t}")
             )
-            top_per_product = (
+            top_theme_per_product = (
                 product_topic_counts.sort_values("count", ascending=False)
                 .groupby("parent_asin")
-                .head(3)
-                .sort_values(["parent_asin", "count"], ascending=[True, False])
+                .head(1)
+                .sort_values("count", ascending=False)
+                .rename(columns={"parent_asin": "product_id"})[["product_id", "topic_label", "count"]]
             )
-            selected_product = st.selectbox("Product (parent_asin)", sorted(real_themes["parent_asin"].unique()))
-            st.dataframe(
-                top_per_product.loc[top_per_product["parent_asin"] == selected_product, ["topic_label", "count"]],
-                hide_index=True,
-            )
-
-with tab_alerts:
-    st.subheader("Flagged products")
-    alerts_df = load_sqlite_table("alerts")
-    if alerts_df.empty:
-        st.info(
-            "No `alerts` table found in data/warehouse.db. This panel reads whatever "
-            "pipeline/detect.py's implementation writes there - Stage 6 is the "
-            "author's own work and isn't finished yet."
-        )
-    else:
-        st.dataframe(alerts_df, hide_index=True)
+            st.caption("Every product with a complaint theme, sorted by how concentrated that theme is. Click a column header to re-sort.")
+            st.dataframe(top_theme_per_product, hide_index=True, use_container_width=True)
 
 with tab_models:
     st.subheader("Baseline sentiment model")
-    baseline_entries = load_registry(str(BASELINE_REGISTRY_PATH))
     if not baseline_entries:
         st.info("No models/registry.json found yet - run scripts/train_baseline.py first.")
     else:
@@ -160,10 +169,9 @@ with tab_models:
             }
             for entry in baseline_entries
         ]
-        st.dataframe(pd.DataFrame(baseline_rows), hide_index=True)
+        st.dataframe(pd.DataFrame(baseline_rows), hide_index=True, use_container_width=True)
 
     st.subheader("Topic model")
-    topics_entries = load_registry(str(TOPICS_REGISTRY_PATH))
     if not topics_entries:
         st.info("No models/topics_registry.json found yet - run scripts/fit_topics.py first.")
     else:
@@ -177,4 +185,4 @@ with tab_models:
             }
             for entry in topics_entries
         ]
-        st.dataframe(pd.DataFrame(topics_rows), hide_index=True)
+        st.dataframe(pd.DataFrame(topics_rows), hide_index=True, use_container_width=True)

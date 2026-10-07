@@ -478,3 +478,69 @@ specifically. If the ingest window grows much larger (more weeks per
 product), 2.0 may turn out to be too sensitive and produce noisy alerts on
 a series that now has enough points for its std to be a stable estimate -
 worth revisiting then, not assumed to be correct forever.
+
+## 2026-10-07 — Found and fixed a real train/serve overlap; widened the window to 2 years
+
+**Context:** user feedback that 27 alerts on a 200-day window "feels
+unconvincing." Before just widening the window for appearances, checked
+whether widening it further was even safe - and found it wasn't, yet.
+
+**The bug:** when `window.lookback_days` was widened 30&rarr;200 for the
+Stage 6 work, nobody checked whether that created overlap with the
+baseline's own training population. It did: the baseline was trained on
+everything before `2023-08-07` (the window boundary *at training time*),
+but the 200-day window scored data back to `2023-02-18` - about 169 days
+of data the model had already seen during training were also being scored
+by it. This directly contradicts the temporal train/serve split documented
+as a deliberate decision in Stage 2. It went unnoticed because nothing
+automatically checks this invariant - it has to be checked by hand every
+time the window changes.
+
+**The fix, not a shortcut:** widened `lookback_days` to 730 (2 years) and
+*retrained the baseline and refit the topic model against the new window
+boundary* (`window_start=2021-09-06`), so training data is again strictly
+"before" whatever gets scored. New shas pinned: baseline
+`f732ce395686...`, topics `d62f4dfa6044...`. Checked real row counts
+before picking 2 years over 4: 730 days = 15,469 rows (~7 min of DistilBERT
+scoring on this hardware); 1,500 days = 35,441 rows (~17 min) - 2 years was
+chosen as a reasonable balance of scale vs. iteration time, not the
+largest window physically possible.
+
+**Side effect, expected and consistent, not a bug:** the topic model's
+training population *shrank* (9,289&rarr;7,874 negative reviews) even
+though the overall window grew. Training population is "everything before
+window_start," and pushing the serving window further back in time
+necessarily shrinks what counts as "before" it. More weekly history for
+detection costs some training population for the topic model - a real
+trade-off, not free.
+
+**A second bug found as a direct result of the first fix:** after
+retraining and rerunning `make detect`, the `alerts` table had 459 rows,
+not the 449 the script printed. 27 stale alerts from the *previous* run
+(under the old 200-day window) were still in the table; `insert or ignore`
+only prevents an exact duplicate `(product_id, week_start, alert_type)`
+triple - it has no mechanism to remove an alert that no longer holds once
+more historical context changes a product's statistical baseline (a
+product's z-score baseline shifts when its available history changes from
+3 weeks to 2 years, so a week flagged under the short series can stop
+being an outlier under the long one, and vice versa). Cleaned up the stale
+rows manually this time (`delete from alerts where detected_at = ...`),
+confirmed `make detect` is idempotent at the new scale (449, rerun twice,
+stays 449).
+
+**Known gap, not fixed here - this is `pipeline/detect.py`'s own logic to
+own:** `main()` does not currently reconcile the `alerts` table when the
+detection configuration changes (widened window, retrained model). It only
+appends new alerts and ignores exact-duplicate ones. A `main()` that
+deleted every alert not present in the current run's result set before
+inserting (mirroring how `aggregate.py` already upserts `product_week_stats`
+instead of accumulating it forever) would close this gap properly.
+
+**Result:** 969 eligible products (up from 102), 449 real alerts (259
+`rating_drop`, 190 `complaint_volume_spike`, up from 27). Verified real,
+not assumed: full test suite still passes, `metric_value` is clean `real`
+type throughout (no recurrence of the earlier numpy/sqlite3 blob bug),
+and detection PSI dropped to 0.0042/0.0032 (baseline/DistilBERT) - smaller
+than before (0.028/0.017), consistent with a much larger, more stable
+reference/current split (7,501 rows each vs. 1,103 before) producing less
+sampling noise.

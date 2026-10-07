@@ -96,80 +96,125 @@ Raw numbers below are from real runs (`models/registry.json`,
 `evaluation/drift_experiment_results.csv`) - interpretation and write-up are
 still TKTK, left for the author to do himself.
 
-**Baseline (TF-IDF + logistic regression)**, trained on 99,160 reviews,
-held out 24,791 for evaluation:
+All numbers below are from the current pipeline state: `window.lookback_days=730`
+(2 years), baseline sha `f732ce395686...`, topics sha `d62f4dfa6044...` -
+see decisions.md for why the window was widened and what it took to do
+that safely (a real train/serve overlap bug, found and fixed, not just a
+config edit).
 
-| Metric | Value |
-|---|---|
-| Accuracy | 0.952 |
-| Precision | 0.992 |
-| Recall | 0.956 |
-| F1 | 0.974 |
+**Baseline (TF-IDF + logistic regression)**, trained on 87,403 reviews,
+held out 21,851 for evaluation. The headline numbers in `models/registry.json`
+(accuracy 0.951, precision 0.993, recall 0.954, F1 0.973) are already
+**positive-class-only** (sklearn's `average="binary"` default) - they look
+uniformly strong because the test set is ~92.8% positive. The real,
+previously-uncomputed story is the per-class breakdown, reconstructed by
+replaying the exact training-time train/test split against the pinned
+model (verified: reconstructed test set is 21,851 rows, and the positive-
+class numbers match the registry exactly):
 
-TKTK: these are high partly because of the ~12:1 class imbalance in this
-category (see decisions.md) - a per-class breakdown would be the more
-honest number to lead with in an interview.
+| Class | Precision | Recall | F1 | Support |
+|---|---|---|---|---|
+| Negative (complaint) | 0.605 | 0.914 | 0.728 | 1,575 |
+| Positive | 0.993 | 0.954 | 0.973 | 20,276 |
 
-**Baseline vs. DistilBERT**, same 2,206-row scored window:
+Confusion matrix (rows = true label, columns = predicted):
+
+```
+              pred neg   pred pos
+true neg         1439        136
+true pos          940      19336
+```
+
+**Reading it honestly**: recall on the negative class is strong (0.914 -
+the model catches 91.4% of genuine complaints), but precision is weak
+(0.605 - about 2 in 5 reviews it calls "negative" are actually positive,
+940 false alarms vs. 1,439 true ones). This is the direct, expected cost
+of training with `class_weight="balanced"` instead of undersampling (see
+decisions.md) - it explicitly trades precision for recall on the minority
+class, which is the right trade for a degradation-monitoring system
+(missing a real complaint costs more than one extra false alarm), but the
+opposite of what the 0.951 accuracy headline implies on its own.
+
+This imprecision does **not** contaminate topic modeling - `pipeline/embed.py`
+routes reviews into BERTopic by the real star rating (`rating <= 2`), never
+by this model's predicted label. It would matter anywhere
+`baseline_sentiment_label` is used directly and standalone (e.g. the
+dashboard's model panel).
+
+**Baseline vs. DistilBERT**, same 15,003-row scored window:
 
 | | Baseline | DistilBERT |
 |---|---|---|
-| Throughput | 35,805 rows/sec | 33.7 rows/sec |
-| Predicted positive | 1,854 | 1,796 |
-| Mean score | 0.802 | 0.815 |
+| Throughput | 34,497 rows/sec | 24.0 rows/sec |
+| Agreement | 90.8% (13,617/15,003) | |
+| Disagreement | 9.2% (1,386/15,003) | |
 
-Label agreement: 91.0% (2,008/2,206); disagreement: 9.0% (198/2,206).
-TKTK: what those 198 disagreements actually look like (sarcasm, mixed
-reviews, truncation effects) - not inspected yet.
+A real disagreement case, pulled directly from `data/scored/`: *"Excellent
+cd, great presentation but too expensive!"* (rating 5) - baseline scores
+it 0.84 (positive), DistilBERT scores it 0.00 (negative). Explainable, not
+random: the baseline is bag-of-words and sees "excellent"/"great" without
+caring where they sit in the sentence; DistilBERT reads in order and
+weights the clause it ends on ("too expensive!") more heavily. TKTK: a
+systematic look at what the other ~1,385 disagreements look like, beyond
+this one hand-picked example.
 
-**Topic model**: 50 topics found; 3,645 of 9,289 training reviews (39.2%)
-landed in the outlier bucket (topic `-1`) rather than any cluster. Labels
-are hand-edited (see `config/topic_names.yaml`), grounded in each topic's
-actual representative documents, not guessed from keyword stems alone -
-e.g. `9` -> `cd_skips_during_playback`, `4` -> `missing_promotional_merch_poster_photocard`,
-`13` -> `cracked_or_broken_cd_case`.
+**Topic model**: 47 topics found; 3,270 of 7,874 training reviews (41.5%)
+landed in the outlier bucket (topic `-1`) rather than any cluster. The
+training population *shrank* from the previous fit (9,289&rarr;7,874
+negative reviews) as a direct, expected consequence of widening the
+serving window - see decisions.md.
 
-Labeling surfaced a real fragmentation issue: topics `23`, `32`, and `41`
-are all "poor sound/recording quality," split into three separate clusters
-instead of one, and `35`/`43` are near-duplicate "Beatles bootleg" warnings
-- documented in the label file's header rather than silently merged, since
-fixing it means retuning `hdbscan.min_cluster_size`/`min_samples` and
-deliberately refitting, not editing labels. Also surfaced: topics `8`, `37`,
-and `44` turn out to be a book, a food item, and a garden hose/instrument
-part - miscategorized into Digital_Music in the source dataset.
+**Known gap, stated plainly**: `config/topic_names.yaml` is currently the
+auto-generated keyword stems, not hand-edited - the previous hand-editing
+pass (documented in an earlier version of this README) was done against
+the *old* 50-topic fit, and a refit assigns entirely new topic IDs with
+different content, so those labels no longer apply to anything and were
+not carried forward. Re-labeling this 47-topic fit from its real
+representative documents is still TKTK.
 
-TKTK: whether 39.2% outliers is acceptable or needs retuning, and whether
-the fragmented "sound quality" topics are worth merging on the next
-deliberate refit.
+TKTK: whether 41.5% outliers is acceptable or needs retuning, and the
+hand-edited label set for this fit.
 
 **Drift experiment** (`evaluation/drift_experiment.py`, 60 simulated days,
 Gift_Cards injected from day 30 onward), PSI against a fixed pre-injection
-reference:
+reference, rerun against the newly pinned baseline:
 
 | | Baseline PSI | DistilBERT PSI |
 |---|---|---|
-| Pre-injection (days 0-29) | 0.030 - 0.063 (mean 0.040) | 0.012 - 0.295 (mean 0.144) |
-| Post-injection (days 30-59) | 0.089 - 0.614 (mean 0.180) | 0.065 - 0.911 (mean 0.454) |
-| Day 29 -> day 30 | 0.042 -> 0.118 | 0.210 -> 0.551 |
+| Pre-injection (days 0-29) | 0.017 - 0.144 (mean 0.064) | 0.012 - 0.295 (mean 0.144) |
+| Post-injection (days 30-59) | 0.073 - 0.520 (mean 0.141) | 0.065 - 0.911 (mean 0.454) |
+| Day 29 -> day 30 | 0.041 -> 0.076 | 0.210 -> 0.551 |
+
+DistilBERT's numbers are unchanged from before (it wasn't retrained, only
+the baseline and topic model were) - confirms the harness is deterministic
+for a fixed model.
 
 TKTK: what this does/doesn't show - e.g. whether DistilBERT's much larger
 pre-injection PSI range (up to 0.295 with *no* injection yet) means it's
 just a noisier signal on this data, or whether the fixed reference window
 was too small to give DistilBERT a stable baseline.
 
-**Detection** (`pipeline/detect.py`, run against a 200-day window, 102
-products with >= 3 weeks of history, `z_threshold=2.0`):
-- 27 alerts: 15 `rating_drop`, 12 `complaint_volume_spike`.
-- Model drift (PSI, chronological first-half/second-half split of all 2,206
-  scored reviews): baseline 0.028, DistilBERT 0.017 - both well under the
-  0.1 "no significant shift" rule of thumb, consistent with both halves
-  coming from the same stable historical category rather than a real shift.
+**Detection** (`pipeline/detect.py`, run against the 2-year window, 969
+products with >= 3 weeks of history, `z_threshold=2.0` - rationale in
+decisions.md):
+- 449 alerts: 259 `rating_drop`, 190 `complaint_volume_spike` (up from 27
+  on the previous 200-day window - see decisions.md for what widening the
+  window safely required: a real train/serve overlap bug, found and
+  fixed, not just a bigger number).
+- Model drift (PSI, chronological first-half/second-half split of all
+  15,003 scored reviews): baseline 0.0042, DistilBERT 0.0032 - smaller
+  than the previous window's 0.028/0.017, consistent with a much larger,
+  more stable reference/current split (7,501 rows each vs. 1,103 before)
+  producing less sampling noise.
+- A found-and-fixed bug along the way: `insert or ignore` alone doesn't
+  reconcile the `alerts` table when the detection configuration changes -
+  27 stale alerts from the abandoned 200-day window lingered until cleaned
+  up by hand. `main()` doesn't yet auto-reconcile stale alerts on every
+  run; documented as an open gap in decisions.md, not fixed silently.
 
-TKTK: whether `z_threshold=2.0` is the right sensitivity for production use
-(chosen after observing that the default `3.0` missed a real rating-drop
-week in testing - this decision doesn't have a `docs/decisions.md` entry
-yet and should get one, per this project's own convention), and 2-3 example
-alerts worth walking through in an interview.
+TKTK: 2-3 example alerts worth walking through in an interview (three are
+already walked through step by step in the Pipeline Blueprint artifact,
+with hand-verified z-scores).
 
 ## Limitations
 
@@ -177,10 +222,14 @@ alerts worth walking through in an interview.
   artifacts (not committed to git); a cache eviction fails the run loudly
   rather than silently retraining - a known gap in a no-paid-services setup,
   not an oversight (see `.github/workflows/pipeline.yml`).
-- BERTopic's outlier rate on this category's training population is 39.2%
-  (3,645/9,289) - whether that's acceptable or needs retuning is TKTK.
+- BERTopic's outlier rate on this category's training population is 41.5%
+  (3,270/7,874) - whether that's acceptable or needs retuning is TKTK.
 - The language filter's short-text exemption threshold is a judgment call,
   not a tuned optimum - see decisions.md.
+- `config/topic_names.yaml` is currently un-edited keyword stems for the
+  current 47-topic fit - a refit resets this file, and re-labeling it from
+  real representative documents is a manual step that hasn't been redone
+  since the window was widened.
 
 ## How this was built
 
