@@ -201,12 +201,15 @@ just a noisier signal on this data, or whether the fixed reference window
 was too small to give DistilBERT a stable baseline.
 
 **Detection** (`pipeline/detect.py`, run against the 2-year window, 969
-products with >= 3 weeks of history, `z_threshold=2.0` - rationale in
-decisions.md):
-- 313 alerts: 259 `rating_drop`, 54 `complaint_volume_spike` (up from 27
-  total on the previous 200-day window - see decisions.md for what
-  widening the window safely required: a real train/serve overlap bug,
-  found and fixed, not just a bigger number).
+products with >= 3 weeks of history; two different thresholds, not one -
+`z_threshold=2.0` for the volume check, `z_threshold=4.0` for the rating
+check - rationale for each in decisions.md):
+- 66 alerts: 54 `complaint_volume_spike`, 12 `rating_drop` (down from 313
+  at `z_threshold=2.0` for both checks - the rating check alone had been
+  producing 259 of those 313 alerts, which is why it was split out and
+  tightened separately; see decisions.md for that comparison and for what
+  widening the window safely required earlier: a real train/serve overlap
+  bug, found and fixed, not just a bigger number).
 - Model drift (PSI, chronological first-half/second-half split of all
   15,003 scored reviews): baseline 0.0042, DistilBERT 0.0032 - smaller
   than the previous window's 0.028/0.017, consistent with a much larger,

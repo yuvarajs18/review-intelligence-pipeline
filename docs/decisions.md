@@ -585,3 +585,51 @@ fixing `main()`'s reconciliation than either one alone.
 **Consequence:** 313 real alerts (54 `complaint_volume_spike`, 259
 `rating_drop`), down from 449. Verified: idempotent across reruns, full
 test suite passes, `B07D5ZGJF1` confirmed absent from fresh output.
+
+## 2026-10-09 — Split `rating_flags` to `z_threshold=4.0`, separate from `count_flags`'s 2.0
+
+**Context:** the 2026-10-03 entry above set `z_threshold=2.0` for *both*
+series in `main()`. At that setting, `rating_drop` alone produced 259 of
+the 313 alerts - the large majority of all alerts, on a check that, unlike
+`complaint_volume_spike`, had no secondary corroborating condition (no
+volume check, just the rating series flagging itself). That imbalance was
+reason enough to reconsider `rating_flags` on its own, separately from
+`count_flags`, rather than assume one shared threshold was still right for
+both now that the window is 2 years instead of 30-200 days.
+
+**A real mechanical issue surfaced while deciding this, not a design
+choice:** across several "run the code" turns, `rating_flags`'s
+`z_threshold` was observed at both `2.0` and `4.0` in the committed file
+without an explicit edit being made in the session each time - confirmed
+via `git show 01686aa:pipeline/detect.py`, which already had `4.0` at a
+commit point where the accompanying numbers (313 total, 259 `rating_drop`)
+had been verified against `2.0`'s output. That mismatch means the 313/259
+figures recorded in the 2026-10-09 entry above describe `z_threshold=2.0`'s
+behavior, not necessarily the file's exact state at every point since.
+Flagging this plainly rather than quietly reconciling it: the numbers below
+are freshly verified against the file's current, actual contents, not
+inferred from history.
+
+**Choice, asked directly and answered explicitly:** keep `count_flags` at
+`2.0` (unchanged - still tuned for short per-product histories, per the
+2026-10-03 entry) and set `rating_flags` to `4.0`, stricter than before.
+This is now two different thresholds for two different series, not one
+shared value - `mean_rating` series apparently produce enough borderline
+z-scores at `2.0` to flag the large majority of eligible products, where
+`review_count` does not.
+
+**Verified against a fresh run, alerts table cleared and rebuilt from
+scratch (not just a stale-alerts patch):** 66 total alerts - 54
+`complaint_volume_spike` (unchanged, since `count_flags` didn't change) and
+12 `rating_drop` (down from 259). Confirmed idempotent (`make detect` rerun
+twice, count stays 66).
+
+**Consequence:** `rating_drop` alerts are now rare and, by construction,
+only fire on genuinely extreme rating swings rather than any one week on
+either side of a product's own mean. This trades sensitivity for
+precision - a product with a real, moderate rating decline over a few
+weeks may no longer surface a `rating_drop` alert at all. Whether `4.0` is
+the right trade long-term, versus a per-product-history-length-aware
+threshold, is not re-derived here from first principles - it's the
+author's explicit choice after seeing both outputs side by side, and is
+revisitable the same way `2.0` was revisitable above.

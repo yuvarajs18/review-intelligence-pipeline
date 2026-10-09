@@ -18,7 +18,9 @@ main() wires both primitives to the warehouse (config.paths.warehouse):
 per-product degradation alerts (direction-aware, written idempotently to
 an `alerts` table) and model-drift detection (PSI between a chronological
 reference/current split of sentiment scores, logged to the `runs` table).
-See docs/decisions.md for the z_threshold=2.0 decision.
+See docs/decisions.md for why count_flags uses z_threshold=2.0 and
+rating_flags uses z_threshold=4.0 - two different values, not one shared
+threshold.
 """
 
 from collections.abc import Sequence
