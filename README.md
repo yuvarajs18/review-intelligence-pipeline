@@ -203,20 +203,30 @@ was too small to give DistilBERT a stable baseline.
 **Detection** (`pipeline/detect.py`, run against the 2-year window, 969
 products with >= 3 weeks of history, `z_threshold=2.0` - rationale in
 decisions.md):
-- 449 alerts: 259 `rating_drop`, 190 `complaint_volume_spike` (up from 27
-  on the previous 200-day window - see decisions.md for what widening the
-  window safely required: a real train/serve overlap bug, found and
-  fixed, not just a bigger number).
+- 313 alerts: 259 `rating_drop`, 54 `complaint_volume_spike` (up from 27
+  total on the previous 200-day window - see decisions.md for what
+  widening the window safely required: a real train/serve overlap bug,
+  found and fixed, not just a bigger number).
 - Model drift (PSI, chronological first-half/second-half split of all
   15,003 scored reviews): baseline 0.0042, DistilBERT 0.0032 - smaller
   than the previous window's 0.028/0.017, consistent with a much larger,
   more stable reference/current split (7,501 rows each vs. 1,103 before)
   producing less sampling noise.
-- A found-and-fixed bug along the way: `insert or ignore` alone doesn't
-  reconcile the `alerts` table when the detection configuration changes -
-  27 stale alerts from the abandoned 200-day window lingered until cleaned
-  up by hand. `main()` doesn't yet auto-reconcile stale alerts on every
-  run; documented as an open gap in decisions.md, not fixed silently.
+- A real bug, found by inspecting one alert rather than trusting the
+  count: `complaint_volume_spike` fired on product `B07D5ZGJF1`, whose
+  `mean_rating` is 5.0 on every single week it has - the check only looked
+  at review-count volume, never whether those reviews were actually
+  negative. Fixed by requiring the week's rating to also be below the
+  product's own average; `complaint_volume_spike` alerts dropped
+  190&rarr;54 as a direct result (most of the previous ones were this
+  exact false-positive pattern).
+- That fix then triggered the *same* stale-alerts gap a second time,
+  independently (first found when the window widened, not fixed then
+  either): after the logic change, the `alerts` table still showed 449
+  until manually cleared and repopulated, since `insert or ignore` had no
+  way to remove the 136 alerts the new logic no longer produces. Two
+  independent real occurrences of this gap - documented in decisions.md,
+  still not fixed in `main()` itself.
 
 TKTK: 2-3 example alerts worth walking through in an interview (three are
 already walked through step by step in the Pipeline Blueprint artifact,

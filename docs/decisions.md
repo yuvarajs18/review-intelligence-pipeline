@@ -544,3 +544,44 @@ and detection PSI dropped to 0.0042/0.0032 (baseline/DistilBERT) - smaller
 than before (0.028/0.017), consistent with a much larger, more stable
 reference/current split (7,501 rows each vs. 1,103 before) producing less
 sampling noise.
+
+## 2026-10-09 — `complaint_volume_spike` fired on a product with zero complaints
+
+**Context:** inspecting a real alert from the dashboard - `B07D5ZGJF1`,
+`complaint_volume_spike`, metric_value `2`. Checked its full weekly
+history: `mean_rating` is `5.0` on every single week, including the
+flagged one. The alert fired on a product that has never once had a bad
+review.
+
+**The bug:** `count_bad` in `main()` only checked whether `review_count`
+spiked above the product's own average - it never checked whether the
+reviews behind that spike were actually negative. Any week where volume
+jumped relative to a product's own (often very small) baseline got called
+a "complaint" spike, even when every review that week was 5 stars. For
+`B07D5ZGJF1`, going from its usual 1 review/week to 2 was already a large
+*relative* jump on such a small baseline, which was enough to clear
+`z_threshold=2.0` regardless of sentiment.
+
+**The fix:** added a third condition to `count_bad` - the same week's
+`mean_rating` must also be below that product's own average rating,
+alongside the existing volume-spike and above-average-count checks. A
+volume spike made entirely of good reviews now correctly produces no
+alert.
+
+**A second, real demonstration of the stale-alerts gap** (first found
+2026-10-07, still not fixed - see above): after applying the fix, fresh
+detection correctly dropped from 449 to 313 alerts (`complaint_volume_spike`
+190&rarr;54), but the `alerts` table still showed 449 immediately after
+rerunning `make detect` - the 136 now-invalid alerts, including
+`B07D5ZGJF1`'s, were still sitting in the table from before the fix, and
+`insert or ignore` found nothing new to insert since the 313 correct
+alerts were already a subset of the 449 stale ones. Had to `delete from
+alerts` and let one fresh run repopulate it from scratch to actually see
+the corrected 313. This is the exact same root cause as before, now
+triggered by a logic change instead of a config change - two independent
+real occurrences of the same gap is a stronger argument for actually
+fixing `main()`'s reconciliation than either one alone.
+
+**Consequence:** 313 real alerts (54 `complaint_volume_spike`, 259
+`rating_drop`), down from 449. Verified: idempotent across reruns, full
+test suite passes, `B07D5ZGJF1` confirmed absent from fresh output.

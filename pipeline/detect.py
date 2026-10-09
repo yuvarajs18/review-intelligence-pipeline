@@ -145,9 +145,10 @@ def main() -> None:
         product_rows = stats[stats["product_id"] == product_id].sort_values("week_start").reset_index(drop=True)
 
         count_flags = detect_spike(product_rows["review_count"], z_threshold=2.0)
-        count_bad = count_flags & (product_rows["review_count"] > product_rows["review_count"].mean())
+        count_bad = count_flags & (product_rows["review_count"] > product_rows["review_count"].mean())& (product_rows["mean_rating"] < product_rows["mean_rating"].mean())
 
-        rating_flags = detect_spike(product_rows["mean_rating"], z_threshold=2.0)
+
+        rating_flags = detect_spike(product_rows["mean_rating"], z_threshold=4.0)
         rating_bad = rating_flags & (product_rows["mean_rating"] < product_rows["mean_rating"].mean())
 
         for i in range(len(product_rows)):
