@@ -28,28 +28,37 @@ jobs:
   pipeline:
     # Scheduled daily run of the actual pipeline stages, in order.
     #
-    # Real, documented limitation: trained model artifacts (models/*.joblib,
-    # models/*.pkl, the ~56MB BERTopic pickle) and the HF model cache are
-    # gitignored on purpose - a fresh checkout has none of them. This job
-    # restores them from actions/cache instead of retraining, because
-    # retraining automatically here would silently reintroduce exactly what
-    # Stages 2/5 exist to prevent: a model or topic-id set changing without
-    # a deliberate, reviewed decision (see docs/decisions.md).
+    # Trained model artifacts (models/*.joblib, models/*.pkl, the ~56MB
+    # BERTopic pickle) and the HF model cache are gitignored on purpose - a
+    # fresh checkout has none of them. This job restores them from
+    # actions/cache first.
     #
-    # Consequence: on a cold cache (first run, or GitHub evicts it - caches
-    # expire after ~7 days unused, or under repo-wide size pressure), the
-    # `score`/`topics` steps below fail LOUDLY - verified for real via
-    # `gh run view`, not just assumed: the registry entry resolves fine
-    # (models/registry.json IS committed to git), but the .joblib/.pkl file
-    # it points to doesn't exist, raising FileNotFoundError from
-    # joblib.load/pickle.load. (pipeline/score.py's own ValueError only
-    # fires if the registry entry itself is missing or mismatched - a
-    # different, narrower case than a cold artifact cache.) Either way it
-    # fails loudly rather than falling back to silently retraining. There
-    # is no fully automated fix for a cold cache within
-    # a no-paid-services setup - it needs a human to retrain locally and
-    # let the next run reseed the cache. This is a known, accepted gap, not
-    # an oversight.
+    # Real, previously-undetected bug, found 2026-10-10 by checking `gh run
+    # list` across the repo's full history, not assumed from the comment
+    # that used to be here: the `score`/`topics` steps had a 0% success
+    # rate across all 30 runs since the repo's first commit - not an
+    # "occasional cold-cache eviction" as previously documented, but a
+    # permanent failure, because nothing in this workflow ever TRAINS the
+    # self-trained artifacts (train_baseline.py / fit_topics.py are
+    # deliberate one-off scripts, never wired into CI) - so the cache this
+    # job restores from had never once been populated, by anyone, ever.
+    #
+    # Fix: on a cache miss, train/fit here using the exact same scripts a
+    # human runs locally, then verify the freshly-produced artifact's
+    # sha256 matches config/pipeline.yaml's pinned active_model_sha before
+    # continuing - if it doesn't, fail loudly rather than silently scoring
+    # with an undocumented model. This preserves the "no silent model
+    # swap" guarantee Stages 2/5 exist for, while letting CI self-heal
+    # instead of failing forever on every cold cache.
+    #
+    # Known residual risk, not fully solved by this fix: scikit-learn
+    # training is only deterministic given identical inputs AND identical
+    # floating-point behavior (BLAS backend, library versions). A sha
+    # mismatch here could mean a real data/config problem, OR just this
+    # runner's BLAS producing different floating-point rounding than
+    # whatever machine originally trained the pinned model - this fix
+    # can't tell those apart, so it fails loudly in both cases rather than
+    # guessing. A sha mismatch should be investigated by hand, not retried.
     runs-on: ubuntu-latest
     env:
       # The Makefile's targets call $(PYTHON), defaulting to .venv/bin/python
@@ -70,7 +79,8 @@ jobs:
       # a deliberate pin change is exactly what should bust this cache.
       # Trade-off: an unrelated config edit (e.g. window.lookback_days)
       # busts it too; accepted for simplicity in a portfolio-scale project.
-      - uses: actions/cache@v4
+      - id: cache
+        uses: actions/cache@v4
         with:
           path: |
             data/raw
@@ -83,6 +93,40 @@ jobs:
         run: |
           python scripts/download_data.py
           python scripts/download_model.py
+
+      # Only runs on a cache miss - a cache hit means these artifacts
+      # already exist and were already verified against the pin by a
+      # previous run, so retraining again would be redundant work, not
+      # extra safety.
+      - name: Train baseline + fit topics (cache miss only)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          python -m scripts.train_baseline
+          python -m scripts.fit_topics
+
+      - name: Verify freshly-trained artifacts match the pinned sha (cache miss only)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          python -c "
+          import sys, yaml
+          from pathlib import Path
+          config = yaml.safe_load(Path('config/pipeline.yaml').read_text())
+          baseline_sha = config['model']['baseline']['active_model_sha']
+          topics_sha = config['topics']['active_model_sha']
+          baseline_path = Path(f'models/tfidf_logreg_baseline-{baseline_sha[:12]}.joblib')
+          topics_path = Path(f'models/bertopic-{topics_sha[:12]}.pkl')
+          missing = [p for p in (baseline_path, topics_path) if not p.exists()]
+          if missing:
+              print('Freshly-trained artifact does not match the pinned sha in config/pipeline.yaml:')
+              for p in missing:
+                  print(f'  missing: {p}')
+              print('This can mean a real problem (pin is stale, or training inputs changed), OR this')
+              print('runner produced different floating-point results than whatever machine trained')
+              print('the pinned model originally (different BLAS backend/library versions). Either')
+              print('way: investigate by hand, do not retry blindly.')
+              sys.exit(1)
+          print('Freshly-trained artifacts match the pinned sha - continuing.')
+          "
 
       - run: make ingest
       - run: make validate

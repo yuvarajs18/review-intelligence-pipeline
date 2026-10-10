@@ -633,3 +633,52 @@ the right trade long-term, versus a per-product-history-length-aware
 threshold, is not re-derived here from first principles - it's the
 author's explicit choice after seeing both outputs side by side, and is
 revisitable the same way `2.0` was revisitable above.
+
+## 2026-10-10 — CI's `pipeline` job never actually succeeded; added cache-miss training
+
+**Context:** a full project audit, checking real state rather than re-reading
+docs. `gh run list` across the repo's entire history (30 runs, from the first
+commit through today) showed the `pipeline` job failing on every single run,
+with the same `FileNotFoundError` on the baseline `.joblib` each time. The
+`test` job genuinely passes (the 2026-10-03 CI fix was real), but `pipeline`
+never had.
+
+**The bug in the workflow's own documentation, not just the workflow:** the
+comment above the `pipeline` job described this as an occasional cold-cache
+event - "GitHub evicts it [the cache] after ~7 days unused." That framing was
+never checked against the actual run history. The real cause is structural,
+not occasional: nothing in the workflow ever *trains* `models/*.joblib` /
+`*.pkl` - `scripts/train_baseline.py` and `scripts/fit_topics.py` are
+deliberately one-off, never wired into CI - so `actions/cache` was restoring
+from a cache slot that had never once been populated, by anyone, in this
+repo's history. A 100% failure rate was reported in prose as "occasional."
+
+**The fix:** added two steps to the `pipeline` job, both gated on
+`steps.cache.outputs.cache-hit != 'true'` (cache miss only - a cache hit
+means the artifacts already exist and were already verified against the pin
+by a previous run): train the baseline and fit the topic model using the
+exact same scripts a human runs locally, then verify the freshly-produced
+artifact's filename (which encodes its sha256) matches
+`config/pipeline.yaml`'s pinned `active_model_sha` / topics sha before
+continuing. A mismatch fails the job loudly rather than silently scoring with
+an undocumented model - preserving the same "no silent model swap" guarantee
+Stages 2/5 exist for, while letting CI self-heal on a cold cache instead of
+failing forever.
+
+**Known residual risk, deliberately not solved here:** scikit-learn training
+is only bit-for-bit deterministic given identical inputs *and* identical
+floating-point behavior - different BLAS backends (this repo was developed
+on macOS; the runner is Ubuntu) can produce slightly different coefficients
+after the same fit, which would change the serialized artifact's bytes and
+therefore its sha256, with no real difference in what the model actually
+does. This fix can't distinguish that from a genuine problem (e.g. a stale
+pin, or training inputs that changed) - it fails loudly in both cases rather
+than guessing, and a mismatch needs a human to look at it rather than being
+retried automatically.
+
+**Verified locally, not just read:** re-ran the exact verification snippet
+against the current pinned shas (`f732ce395686...` baseline,
+`d62f4dfa6044...` topics) - both resolve to real, present artifact files.
+The new CI steps themselves are only provable by an actual CI run (ubuntu
+runner, not this macOS dev machine) - that's the next real check, not
+assumed from local success.

@@ -237,10 +237,15 @@ with hand-verified z-scores).
 
 ## Limitations
 
-- CI's scheduled pipeline run depends on `actions/cache` for trained model
-  artifacts (not committed to git); a cache eviction fails the run loudly
-  rather than silently retraining - a known gap in a no-paid-services setup,
-  not an oversight (see `.github/workflows/pipeline.yml`).
+- CI's `pipeline` job had a 0% success rate across its entire history (30
+  runs) until 2026-10-10 - not an occasional cache-eviction event as this
+  doc used to claim, but a structural one: nothing in the workflow ever
+  *trained* the self-trained artifacts it was trying to restore from cache.
+  Fixed by training on a cache miss and verifying the result's sha matches
+  the pin before continuing (see `.github/workflows/pipeline.yml` and
+  decisions.md) - residual risk is cross-platform floating-point
+  nondeterminism causing a false-alarm sha mismatch, which fails loudly by
+  design rather than silently retrying.
 - BERTopic's outlier rate on this category's training population is 41.5%
   (3,270/7,874) - whether that's acceptable or needs retuning is TKTK.
 - The language filter's short-text exemption threshold is a judgment call,
