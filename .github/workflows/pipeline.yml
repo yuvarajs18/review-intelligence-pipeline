@@ -44,21 +44,25 @@ jobs:
     # job restores from had never once been populated, by anyone, ever.
     #
     # Fix: on a cache miss, train/fit here using the exact same scripts a
-    # human runs locally, then verify the freshly-produced artifact's
-    # sha256 matches config/pipeline.yaml's pinned active_model_sha before
-    # continuing - if it doesn't, fail loudly rather than silently scoring
-    # with an undocumented model. This preserves the "no silent model
-    # swap" guarantee Stages 2/5 exist for, while letting CI self-heal
-    # instead of failing forever on every cold cache.
+    # human runs locally, then compare the freshly-produced artifact's
+    # metrics against the pinned registry entry's metrics WITHIN A
+    # TOLERANCE, not exact sha equality.
     #
-    # Known residual risk, not fully solved by this fix: scikit-learn
-    # training is only deterministic given identical inputs AND identical
-    # floating-point behavior (BLAS backend, library versions). A sha
-    # mismatch here could mean a real data/config problem, OR just this
-    # runner's BLAS producing different floating-point rounding than
-    # whatever machine originally trained the pinned model - this fix
-    # can't tell those apart, so it fails loudly in both cases rather than
-    # guessing. A sha mismatch should be investigated by hand, not retried.
+    # Why tolerance, not exact sha match: tried exact sha first (2026-10-10)
+    # and it failed on the very first real run - scikit-learn/UMAP training
+    # is only bit-identical given identical floating-point behavior, and
+    # this Ubuntu runner's BLAS produces slightly different results than
+    # the macOS dev machine that trained the pinned model (accuracy
+    # 0.9502539929522676 here vs. the pinned 0.9507574024072125 - a real,
+    # tiny difference, not a bug). Exact-byte-hash pinning and "retrain
+    # fresh on different hardware" are fundamentally incompatible - see
+    # docs/decisions.md for the full comparison. If metrics are within
+    # tolerance, this run's config (in-workspace only, never committed or
+    # pushed) is repointed at the freshly-trained sha so `make score` /
+    # `make topics` below actually have a file to load - the committed pin
+    # in git is untouched and stays authoritative for local/production use.
+    # If metrics are NOT within tolerance, fail loudly - that is a real
+    # divergence worth a human looking at, not noise.
     runs-on: ubuntu-latest
     env:
       # The Makefile's targets call $(PYTHON), defaulting to .venv/bin/python
@@ -104,28 +108,65 @@ jobs:
           python -m scripts.train_baseline
           python -m scripts.fit_topics
 
-      - name: Verify freshly-trained artifacts match the pinned sha (cache miss only)
+      - name: Verify freshly-trained artifacts are within tolerance of the pin (cache miss only)
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           python -c "
-          import sys, yaml
+          import json, sys, yaml
           from pathlib import Path
-          config = yaml.safe_load(Path('config/pipeline.yaml').read_text())
-          baseline_sha = config['model']['baseline']['active_model_sha']
-          topics_sha = config['topics']['active_model_sha']
-          baseline_path = Path(f'models/tfidf_logreg_baseline-{baseline_sha[:12]}.joblib')
-          topics_path = Path(f'models/bertopic-{topics_sha[:12]}.pkl')
-          missing = [p for p in (baseline_path, topics_path) if not p.exists()]
-          if missing:
-              print('Freshly-trained artifact does not match the pinned sha in config/pipeline.yaml:')
-              for p in missing:
-                  print(f'  missing: {p}')
-              print('This can mean a real problem (pin is stale, or training inputs changed), OR this')
-              print('runner produced different floating-point results than whatever machine trained')
-              print('the pinned model originally (different BLAS backend/library versions). Either')
-              print('way: investigate by hand, do not retry blindly.')
+
+          METRIC_TOLERANCE = 0.005      # baseline accuracy/f1, absolute difference
+          N_TOPICS_TOLERANCE = 5        # topic count, absolute difference
+          OUTLIER_RATE_TOLERANCE = 0.05 # outlier share of training rows, absolute difference
+
+          config_path = Path('config/pipeline.yaml')
+          config = yaml.safe_load(config_path.read_text())
+          failures = []
+
+          registry = json.loads(Path('models/registry.json').read_text())
+          pinned_sha = config['model']['baseline']['active_model_sha']
+          pinned = next((e for e in registry if e['sha256'] == pinned_sha), None)
+          fresh = registry[-1]
+          if pinned is None:
+              failures.append(f'baseline: pinned sha {pinned_sha[:12]} not found in models/registry.json at all')
+          else:
+              for metric in ('accuracy', 'f1'):
+                  diff = abs(fresh['metrics'][metric] - pinned['metrics'][metric])
+                  if diff > METRIC_TOLERANCE:
+                      failures.append(f'baseline {metric}: pinned={pinned[\"metrics\"][metric]:.4f} fresh={fresh[\"metrics\"][metric]:.4f} diff={diff:.4f} > {METRIC_TOLERANCE}')
+              if not failures:
+                  print(f'baseline within tolerance (pinned sha {pinned_sha[:12]}, fresh sha {fresh[\"sha256\"][:12]}) - using fresh artifact for this run only')
+                  config['model']['baseline']['active_model_sha'] = fresh['sha256']
+
+          topics_registry = json.loads(Path('models/topics_registry.json').read_text())
+          pinned_topics_sha = config['topics']['active_model_sha']
+          pinned_t = next((e for e in topics_registry if e['sha256'] == pinned_topics_sha), None)
+          fresh_t = topics_registry[-1]
+          if pinned_t is None:
+              failures.append(f'topics: pinned sha {pinned_topics_sha[:12]} not found in models/topics_registry.json at all')
+          else:
+              n_topics_diff = abs(fresh_t['n_topics'] - pinned_t['n_topics'])
+              pinned_rate = pinned_t['n_outliers'] / pinned_t['training_rows']
+              fresh_rate = fresh_t['n_outliers'] / fresh_t['training_rows']
+              rate_diff = abs(fresh_rate - pinned_rate)
+              if n_topics_diff > N_TOPICS_TOLERANCE:
+                  failures.append(f'topics n_topics: pinned={pinned_t[\"n_topics\"]} fresh={fresh_t[\"n_topics\"]} diff={n_topics_diff} > {N_TOPICS_TOLERANCE}')
+              if rate_diff > OUTLIER_RATE_TOLERANCE:
+                  failures.append(f'topics outlier_rate: pinned={pinned_rate:.3f} fresh={fresh_rate:.3f} diff={rate_diff:.3f} > {OUTLIER_RATE_TOLERANCE}')
+              if n_topics_diff <= N_TOPICS_TOLERANCE and rate_diff <= OUTLIER_RATE_TOLERANCE:
+                  print(f'topics within tolerance (pinned sha {pinned_topics_sha[:12]}, fresh sha {fresh_t[\"sha256\"][:12]}) - using fresh artifact for this run only')
+                  config['topics']['active_model_sha'] = fresh_t['sha256']
+
+          if failures:
+              print('Freshly-trained artifacts diverge from the pin by more than tolerance:')
+              for f in failures:
+                  print(f'  {f}')
+              print('This needs a human to look at - a real data/config problem, or the tolerance')
+              print('itself needs revisiting, not a blind retry.')
               sys.exit(1)
-          print('Freshly-trained artifacts match the pinned sha - continuing.')
+
+          config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+          print('Rewrote this run\'s in-workspace config to the freshly-trained shas (not committed).')
           "
 
       - run: make ingest

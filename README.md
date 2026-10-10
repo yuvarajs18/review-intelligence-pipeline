@@ -241,11 +241,12 @@ with hand-verified z-scores).
   runs) until 2026-10-10 - not an occasional cache-eviction event as this
   doc used to claim, but a structural one: nothing in the workflow ever
   *trained* the self-trained artifacts it was trying to restore from cache.
-  Fixed by training on a cache miss and verifying the result's sha matches
-  the pin before continuing (see `.github/workflows/pipeline.yml` and
-  decisions.md) - residual risk is cross-platform floating-point
-  nondeterminism causing a false-alarm sha mismatch, which fails loudly by
-  design rather than silently retrying.
+  Fixed by training on a cache miss - first tried an exact-sha check, which
+  failed on the very first real run because training isn't bit-identical
+  across different hardware/BLAS backends, then loosened to a metric
+  tolerance (accuracy/f1 within 0.005 for the baseline, topic count/outlier
+  rate within tolerance for BERTopic). See decisions.md for the real
+  before/after numbers from both attempts.
 - BERTopic's outlier rate on this category's training population is 41.5%
   (3,270/7,874) - whether that's acceptable or needs retuning is TKTK.
 - The language filter's short-text exemption threshold is a judgment call,

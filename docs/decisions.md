@@ -682,3 +682,37 @@ against the current pinned shas (`f732ce395686...` baseline,
 The new CI steps themselves are only provable by an actual CI run (ubuntu
 runner, not this macOS dev machine) - that's the next real check, not
 assumed from local success.
+
+**That CI run happened immediately (same day) and the predicted residual
+risk occurred for real, not just in theory:** the Ubuntu runner's freshly
+trained baseline used the identical 87,403/21,851 train/test split as the
+pinned model (same `random_state`, same row counts), but produced different
+metrics - accuracy `0.9502539929522676` vs. the pinned model's
+`0.9507574024072125` - a small, real floating-point difference, not a data
+or logic bug. Different metrics means different coefficients means a
+different serialized artifact means a different sha256
+(`7b653674e222...` vs. the pinned `f732ce395686...`). The verification step
+did exactly its job: failed loudly instead of silently continuing with a
+different model. The job is not green, but it is now failing for an honest,
+diagnosed reason instead of a confusing one.
+
+**Resolution, same day:** exact-byte-hash equality and "retrain fresh on
+different hardware" are fundamentally incompatible, so the check was
+loosened from sha equality to a metric tolerance - baseline accuracy/f1
+within 0.005 of the pinned entry's; topics within 5 topics and 0.05 outlier
+rate of the pinned entry's. The topics side needed its own check since
+BERTopic has no single accuracy-like metric: compared `n_topics` and
+outlier rate instead, both already recorded in `topics_registry.json`.
+Verified against the real numbers this same CI run produced - topics came
+back as 48 topics / 3,138 outliers vs. the pinned 47 / 3,270 (training rows
+identical, 7,874), both well inside tolerance - confirming UMAP/HDBSCAN
+have the same kind of small cross-platform variance as the baseline's
+LogisticRegression.
+
+When metrics are within tolerance, the run's in-workspace config (never
+committed, never pushed) is repointed at the freshly-trained sha so
+`make score` / `make topics` have an artifact that actually exists on this
+runner - the git-committed pin stays exactly as the human set it, and
+remains authoritative for local/production use. A tolerance breach still
+fails the job loudly; this only closes the gap for the ordinary case of
+"functionally the same model, different bytes."
