@@ -764,3 +764,52 @@ CPU is an unknown variable in the other direction. Verified locally before
 committing: `ensure_data_built()`'s fast path (data already present) adds
 zero overhead, and its subprocess/status mechanics were dry-run tested
 independently of a full pipeline execution.
+
+**Update, same day - deployed for real, and the live rebuild failed twice,
+differently, with no visible error either time:** first deploy produced a
+fully blank page (empty `streamlitApp` DOM, confirmed via reading the page
+tree directly, not just a screenshot) that never changed across several
+checks and a hard reload. Rebooting the app (Manage app -> Reboot)
+produced a second, different failure: the page rendered normally this
+time, but only the two numbers that come from already-committed config
+(47 topics, baseline F1 0.973 - both read straight from
+`models/topics_registry.json` / `models/registry.json`, needing no live
+run at all) were populated. The numbers that require a real pipeline run
+- flagged products, negative reviews analyzed, the `alerts` table itself -
+never appeared, with no error, no traceback, and the script confirmed
+(via repeated `use_container_width` deprecation warnings in the logs)
+to have completed its run multiple times without raising. Streamlit
+Cloud's free-tier CPU throttle was active for both attempts (confirmed via
+its own "Your app has been throttled" banner).
+
+**Root cause not confirmed - no shell access to the container to inspect
+further**, which is itself the real lesson: a live rebuild-on-deploy has
+no equivalent of `gh run view --log-failed` the way CI does, so a silent
+partial failure here is much harder to diagnose than the same class of
+problem was in CI. Rather than keep debugging blind, switched to
+committing the actual, real, already-verified data instead of trying to
+reproduce it live on a resource-constrained free host: `data/warehouse.db`
+(2.1MB) and `data/topics/` (8.9MB, 574 date-partitioned Parquet files,
+matching the pipeline's own overwrite-by-partition layout rather than
+collapsing it into one file). `dashboard/app.py` reads only these two
+paths - not `data/raw`, `data/scored`, or anything else - so this is the
+minimum needed, not a wholesale reversal of keeping `data/` gitignored.
+
+**The `.gitignore` negation gotcha, found while doing this:** a blanket
+`data/` directory-level ignore makes a later `!data/warehouse.db`
+file-level negation silently do nothing - git won't descend into an
+already-ignored directory to evaluate per-file exceptions. Fixed by
+replacing the blanket rule with explicit per-subdirectory ignores
+(`data/raw/`, `data/ingested/`, `data/validated/`, `data/scored/`,
+`data/embedded/`), leaving `data/warehouse.db` and `data/topics/`
+untouched by any ignore rule at all rather than trying to negate one.
+Verified with `git check-ignore` and a real `git add data/` before
+trusting it, not assumed from reading the pattern.
+
+**`dashboard/bootstrap.py` is left in place, now as a true fallback
+only** - harmless no-op given the committed data, but still real code for
+the scenario it was built for (a fork or clone without the committed
+snapshot). Its core lesson stands even though the deploy strategy moved
+away from relying on it: a live rebuild on a resource-constrained free
+host is unobservable in a way a scheduled CI job isn't, which matters more
+than the live-vs-snapshot distinction itself.

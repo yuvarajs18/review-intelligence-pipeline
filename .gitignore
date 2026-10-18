@@ -1,4 +1,14 @@
-data/
+# Per-subdirectory, not a blanket `data/` rule - data/warehouse.db and
+# data/topics/ are committed on purpose (see the exception block below).
+# `data/` as a single directory-level pattern would make a later
+# `!data/warehouse.db` negation a no-op: git never descends into an
+# already-ignored directory to check file-level exceptions.
+data/raw/
+data/ingested/
+data/validated/
+data/scored/
+data/embedded/
+
 models/*.joblib
 models/*.pkl
 models/hf_cache/
@@ -16,3 +26,16 @@ evaluation/*.csv
 # changes (see docs/decisions.md) - it is never updated automatically.
 !models/tfidf_logreg_baseline-f732ce395686.joblib
 !models/bertopic-d62f4dfa6044.pkl
+
+# Exception: data/warehouse.db + data/topics/ - committed 2026-10-18 after
+# the live rebuild-on-deploy approach (dashboard/bootstrap.py) proved
+# unreliable on Streamlit Community Cloud's free tier (CPU throttling
+# produced a fully blank page once, then a silently incomplete build a
+# second time, neither with any visible error - see docs/decisions.md).
+# dashboard/app.py reads only these two paths, not the rest of data/, so
+# this is the minimum needed for the dashboard to show real, verified
+# output (66 alerts, 54/12 split) instantly with zero compute on deploy.
+# bootstrap.py is left in place as a harmless fallback - its fast path
+# (data already present) is a no-op once these files exist.
+!data/warehouse.db
+!data/topics/
