@@ -716,3 +716,51 @@ runner - the git-committed pin stays exactly as the human set it, and
 remains authoritative for local/production use. A tolerance breach still
 fails the job loudly; this only closes the gap for the ordinary case of
 "functionally the same model, different bytes."
+
+## 2026-10-18 — Committed the two pinned model artifacts, for free hosting
+
+**Context:** wanted to put the dashboard on free hosting (Streamlit
+Community Cloud / Hugging Face Spaces) so the project has a live link, not
+just a repo. `dashboard/app.py` reads `data/warehouse.db` and Parquet under
+`data/scored` / `data/topics`, none of which exist on a fresh clone -
+`data/` and `*.db` are gitignored on purpose everywhere else in this
+project.
+
+**Options considered:**
+1. Commit a snapshot of the generated data itself (`data/warehouse.db` +
+   the Parquet layers, ~15-20MB) - fastest for the host, but then the
+   "live" dashboard is really just replaying a frozen snapshot forever,
+   which undercuts the "scheduled, real" framing of the whole project.
+2. Re-run the full pipeline on deploy, loading the pinned model artifacts
+   rather than retraining them (retraining-on-deploy would hit the exact
+   cross-platform floating-point issue documented in the CI entries
+   above, except now on a visitor's first page load instead of a
+   scheduled CI run - clearly worse).
+3. Re-run the full pipeline on deploy AND train the models fresh each
+   time - rejected outright: 15+ minutes of cold-start latency for
+   whoever opens the app first, for no benefit over loading the pin.
+
+**Choice:** option 2. Added `dashboard/bootstrap.py`
+(`ensure_data_built`, wrapped in `st.cache_resource` so it only runs once
+per container lifetime, not once per visitor) that detects a missing
+`data/warehouse.db` and runs `ingest -> detect` fresh via the same stage
+entrypoints `make` uses, loading the two artifacts pinned in
+`config/pipeline.yaml` rather than retraining - same "load the pin, don't
+guess" rule as every other stage. Carved a narrow exception into
+`.gitignore` for exactly those two files (`tfidf_logreg_baseline-
+f732ce395686.joblib`, `bertopic-d62f4dfa6044.pkl`, ~49MB total) rather
+than committing all of `models/`, so the old, unpinned versions of both
+stay out of git.
+
+**Real, mostly-irreversible consequence, stated plainly:** this adds
+~49MB of binary model weights to git history permanently (removable later
+only via a history rewrite, which breaks every existing clone/fork). The
+exception in `.gitignore` is manual and will silently go stale if the pin
+in `config/pipeline.yaml` ever changes without a matching update here -
+there is no test enforcing the two stay in sync. First page load after any
+cold deploy (first visit, or after the host recycles the container) will
+be slow - locally, DistilBERT scoring alone took ~9 minutes; a free host's
+CPU is an unknown variable in the other direction. Verified locally before
+committing: `ensure_data_built()`'s fast path (data already present) adds
+zero overhead, and its subprocess/status mechanics were dry-run tested
+independently of a full pipeline execution.

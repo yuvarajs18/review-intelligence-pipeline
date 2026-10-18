@@ -6,3 +6,13 @@ models/hf_cache/
 __pycache__/
 .venv/
 evaluation/*.csv
+
+# Exception: the two artifacts config/pipeline.yaml currently pins, committed
+# deliberately so a fresh clone (e.g. a free hosting deploy) can run
+# pipeline.score / pipeline.topics without retraining - these load a pinned
+# sha and never retrain by design, so without this exception a fresh clone
+# would only have models/registry.json pointing at files that don't exist.
+# Bump this exception by hand whenever the pin in config/pipeline.yaml
+# changes (see docs/decisions.md) - it is never updated automatically.
+!models/tfidf_logreg_baseline-f732ce395686.joblib
+!models/bertopic-d62f4dfa6044.pkl

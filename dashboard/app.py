@@ -21,7 +21,11 @@ import pandas as pd
 import streamlit as st
 import yaml
 
+from bootstrap import ensure_data_built
+
 st.set_page_config(page_title="Review Intelligence Pipeline", layout="wide")
+
+ensure_data_built()
 
 CONFIG = yaml.safe_load(Path("config/pipeline.yaml").read_text())
 WAREHOUSE_PATH = Path(CONFIG["paths"]["warehouse"])
